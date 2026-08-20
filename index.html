@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Lab PC Status</title>
+
+    <style>
+        :root {
+            color-scheme: light dark;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family:
+                -apple-system,
+                BlinkMacSystemFont,
+                "Segoe UI",
+                sans-serif;
+            background: #111318;
+            color: #f4f4f5;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+
+        h1 {
+            margin-bottom: 6px;
+        }
+
+        .subtitle {
+            color: #a1a1aa;
+            margin-bottom: 30px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns:
+                repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+        }
+
+        .card {
+            background: #1b1e24;
+            border: 1px solid #2c3038;
+            border-radius: 18px;
+            padding: 24px;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .pc-name {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        .status {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+
+            padding: 7px 11px;
+            border-radius: 999px;
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+
+        .dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+        }
+
+        .busy {
+            background: rgba(239, 68, 68, .14);
+            color: #f87171;
+        }
+
+        .busy .dot {
+            background: #ef4444;
+        }
+
+        .available {
+            background: rgba(34, 197, 94, .14);
+            color: #4ade80;
+        }
+
+        .available .dot {
+            background: #22c55e;
+        }
+
+        .away {
+            background: rgba(234, 179, 8, .14);
+            color: #facc15;
+        }
+
+        .away .dot {
+            background: #eab308;
+        }
+
+        .offline,
+        .unknown {
+            background: rgba(161, 161, 170, .14);
+            color: #a1a1aa;
+        }
+
+        .offline .dot,
+        .unknown .dot {
+            background: #71717a;
+        }
+
+        .details {
+            margin-top: 24px;
+            display: grid;
+            gap: 13px;
+        }
+
+        .row {
+            display: flex;
+            justify-content: space-between;
+            gap: 15px;
+        }
+
+        .label {
+            color: #a1a1aa;
+        }
+
+        .value {
+            text-align: right;
+        }
+
+        .footer {
+            margin-top: 30px;
+            color: #71717a;
+            font-size: 0.85rem;
+
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        button {
+            border: 1px solid #3f3f46;
+            background: #27272a;
+            color: #f4f4f5;
+            padding: 7px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #3f3f46;
+        }
+
+        #error {
+            margin-bottom: 20px;
+            color: #f87171;
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="container">
+
+    <h1>연구실 PC 현황</h1>
+
+    <div class="subtitle">
+        실시간 PC 사용 상태
+    </div>
+
+    <div id="error"></div>
+
+    <div id="pc-grid" class="grid">
+
+        <div class="card">
+            데이터를 불러오는 중...
+        </div>
+
+    </div>
+
+    <div class="footer">
+
+        <div id="refresh-info">
+            -
+        </div>
+
+        <button id="refresh-button">
+            새로고침
+        </button>
+
+    </div>
+
+</div>
+
+
+<script>
+
+const SUPABASE_URL =
+    "https://tctotbaeqypeactotcpf.supabase.co";
+
+const SUPABASE_KEY =
+    "sb_publishable_8-Klclyr3n9rLswf9_WBWw_2PLV21-j";
+
+
+const REFRESH_INTERVAL = 5000;
+
+/*
+Agent가 10초마다 heartbeat를 보내므로
+45초 이상 갱신이 없으면 offline 판정
+*/
+const OFFLINE_THRESHOLD = 45000;
+
+
+function getStatusInfo(pc) {
+
+    const lastSeen =
+        new Date(pc.last_seen).getTime();
+
+    const age =
+        Date.now() - lastSeen;
+
+
+    if (age > OFFLINE_THRESHOLD) {
+
+        return {
+            key: "offline",
+            text: "오프라인"
+        };
+
+    }
+
+
+    switch (pc.status) {
+
+        case "busy":
+            return {
+                key: "busy",
+                text: "사용 중"
+            };
+
+        case "available":
+            return {
+                key: "available",
+                text: "사용 가능"
+            };
+
+        case "away":
+            return {
+                key: "away",
+                text: "자리 비움"
+            };
+
+        case "long_task":
+            return {
+                key: "busy",
+                text: "장시간 작업 중"
+            };
+
+        default:
+            return {
+                key: "unknown",
+                text: "확인 중"
+            };
+    }
+}
+
+
+function formatIdle(seconds) {
+
+    if (seconds < 60)
+        return `${seconds}초`;
+
+    if (seconds < 3600)
+        return `${Math.floor(seconds / 60)}분`;
+
+    return `${Math.floor(seconds / 3600)}시간`;
+}
+
+
+function formatSession(pc) {
+
+    if (pc.connection_state === "disconnected")
+        return "연결 해제됨";
+
+    if (pc.connection_state === "none")
+        return "로그인 세션 없음";
+
+    if (pc.session_type === "remote")
+        return "원격 접속";
+
+    if (pc.session_type === "local")
+        return "로컬";
+
+    return "알 수 없음";
+}
+
+
+function formatLastSeen(dateString) {
+
+    const date =
+        new Date(dateString);
+
+    const seconds =
+        Math.floor(
+            (Date.now() - date.getTime()) / 1000
+        );
+
+    if (seconds < 60)
+        return `${seconds}초 전`;
+
+    if (seconds < 3600)
+        return `${Math.floor(seconds / 60)}분 전`;
+
+    return date.toLocaleString("ko-KR");
+}
+
+
+function createCard(pc) {
+
+    const status =
+        getStatusInfo(pc);
+
+    return `
+
+        <div class="card">
+
+            <div class="card-header">
+
+                <div class="pc-name">
+                    ${pc.display_name}
+                </div>
+
+                <div class="status ${status.key}">
+
+                    <span class="dot"></span>
+
+                    ${status.text}
+
+                </div>
+
+            </div>
+
+
+            <div class="details">
+
+                <div class="row">
+                    <span class="label">
+                        접속 상태
+                    </span>
+
+                    <span class="value">
+                        ${formatSession(pc)}
+                    </span>
+                </div>
+
+
+                <div class="row">
+                    <span class="label">
+                        입력 없음
+                    </span>
+
+                    <span class="value">
+                        ${formatIdle(pc.idle_seconds)}
+                    </span>
+                </div>
+
+
+                <div class="row">
+                    <span class="label">
+                        화면 잠금
+                    </span>
+
+                    <span class="value">
+                        ${pc.locked ? "잠김" : "해제"}
+                    </span>
+                </div>
+
+
+                <div class="row">
+                    <span class="label">
+                        마지막 신호
+                    </span>
+
+                    <span class="value">
+                        ${formatLastSeen(pc.last_seen)}
+                    </span>
+                </div>
+
+            </div>
+
+        </div>
+
+    `;
+}
+
+
+async function loadStatus() {
+
+    const errorBox =
+        document.getElementById("error");
+
+    try {
+
+        const response = await fetch(
+
+            `${SUPABASE_URL}/rest/v1/pc_status` +
+            `?select=pc_id,display_name,status,idle_seconds,` +
+            `session_type,connection_state,locked,last_seen` +
+            `&order=pc_id.asc`,
+
+            {
+                headers: {
+                    "apikey": SUPABASE_KEY
+                },
+
+                cache: "no-store"
+            }
+        );
+
+
+        if (!response.ok)
+            throw new Error(
+                `HTTP ${response.status}`
+            );
+
+
+        const pcs =
+            await response.json();
+
+
+        document.getElementById("pc-grid")
+            .innerHTML =
+            pcs.map(createCard).join("");
+
+
+        errorBox.style.display =
+            "none";
+
+
+        document.getElementById(
+            "refresh-info"
+        ).textContent =
+            "최근 조회: " +
+            new Date().toLocaleTimeString(
+                "ko-KR"
+            );
+
+    }
+
+    catch (error) {
+
+        errorBox.textContent =
+            "Supabase 연결 실패: " +
+            error.message;
+
+        errorBox.style.display =
+            "block";
+    }
+}
+
+
+document.getElementById(
+    "refresh-button"
+).addEventListener(
+    "click",
+    loadStatus
+);
+
+
+loadStatus();
+
+setInterval(
+    loadStatus,
+    REFRESH_INTERVAL
+);
+
+</script>
+
+</body>
+</html>
